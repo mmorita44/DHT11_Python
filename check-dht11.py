@@ -1,0 +1,68 @@
+import traceback
+from argparse import ArgumentParser
+from configparser import ConfigParser
+from logging import getLogger
+from logging.config import fileConfig
+
+import RPi.GPIO as GPIO
+from os.path import isfile
+
+from requests import RequestException
+from requests import session
+
+import dht11
+
+# Initializes GPIO
+GPIO.setwarnings(False)
+GPIO.setmode(GPIO.BCM)
+GPIO.cleanup()
+
+# Reads data using pin 4
+instance = dht11.DHT11(pin=4)
+
+if __name__ == '__main__':
+
+    # Reads command options
+    description = "'check-dht11.py' Check digital temperature and humidity data from the DHT11. "
+    parser = ArgumentParser(description=description)
+    parser.add_argument(
+        '--config',
+        type=str,
+        default='config.ini',
+        help='Alternate path for the configure file. (default: "%(default)s")'
+    )
+    args = parser.parse_args()
+
+    # Setups the config
+    if not isfile(args.config):
+        print('This configure file is not found. [{0.config}]'.format(args))
+        exit(1)
+    config = ConfigParser()
+    config.read(args.config)
+
+    # Setups the logger
+    fileConfig(args.config)
+    log = getLogger(__name__)
+
+    # Reads the data
+    result = instance.read()
+
+    try:
+        if result.is_valid():
+            # Sends the result to the Slack if valid
+            session().post(
+                config.get('slack', 'url'),
+                data=dict(
+                    token=config.get('slack', 'token'),
+                    channel=config.get('slack', 'channel'),
+                    text=config.get('slack', 'text').format(result),
+                    as_user=config.getboolean('slack', 'as_user')
+                )
+            )
+            exit(0)
+        else:
+            raise RuntimeError("ERR MISSING DATA" if result.error_code == result.ERR_MISSING_DATA else "ERR CRC")
+
+    except (RequestException, RuntimeError) as e:
+        log.error(traceback.format_exc())
+        exit(1)
